@@ -1,56 +1,113 @@
 "use client";
 
 import { useState } from "react";
-import { PDFDocument, StandardFonts, rgb } from "pdf-lib";
+import { PDFDocument, rgb } from "pdf-lib";
 import QRCode from "qrcode";
 
-// Layout measured from "Golden Hour label.pdf": 378px design grid, 282.96pt page.
-const S = 282.96 / 378;
+import fontkit from "@pdf-lib/fontkit";
+import { Poppins } from "next/font/google";
+
+const poppins = Poppins({ weight: ["400", "700"], subsets: ["latin"] });
+
+// Square label modelled on the reference card: Poppins text block top-left, dotted QR below.
+const P = 282.96; // 10 cm
 const BG = rgb(0.9647, 0.9373, 0.8863);
 const FG = rgb(0.2, 0.3059, 0.2627);
+// R: wider right margin than left so lines wrap early; GAP: space between text groups.
+const LH = 0.056 * P;
+const R = 0.2 * P, GAP = 0.6 * LH, X = 0.107 * P, FS = 0.042 * P, TOP = 0.13 * P, QR_TOP = 0.55 * P, QR_SIZE = 0.4 * P, BOTTOM = 0.07 * P;
 
-async function buildPdf(f: { subtitle: string; title: string; size: string; link: string }) {
+type Fields = { subtitle: string; title: string; material: string; top: string; bottom: string; height: string; link: string };
+// Top x Bottom x Height, in cm.
+// Empty parts are skipped; no line at all when every part is empty.
+const sizeLine = (f: Fields) => {
+  const parts = [f.top, f.bottom, f.height].map((v) => v.trim()).filter(Boolean);
+  return parts.length ? `Size: ${parts.map((v) => `${v} cm`).join(" x ")}` : "";
+};
+
+// QR as shapes in module units: square finder eyes, round dots for everything else.
+function qrShapes(link: string) {
+  const qr = QRCode.create(link, { errorCorrectionLevel: "M" }).modules;
+  const n = qr.size;
+  const eye = (r: number, c: number) => (r < 7 && c < 7) || (r < 7 && c >= n - 7) || (r >= n - 7 && c < 7);
+  const dots: [number, number][] = [];
+  for (let r = 0; r < n; r++) for (let c = 0; c < n; c++) if (qr.get(r, c) && !eye(r, c)) dots.push([r, c]);
+  return { n, dots, eyes: [[0, 0], [0, n - 7], [n - 7, 0]] as [number, number][] };
+}
+
+async function buildPdf(f: Fields) {
   const pdf = await PDFDocument.create();
-  const page = pdf.addPage([282.96, 282.96]);
-  const font = await pdf.embedFont(StandardFonts.Helvetica);
-  page.drawRectangle({ x: 0, y: 0, width: 282.96, height: 282.96, color: BG });
+  pdf.registerFontkit(fontkit);
+  const load = async (w: string) => pdf.embedFont(await (await fetch(`/fonts/Poppins-${w}.ttf`)).arrayBuffer());
+  const [font, bold] = await Promise.all([load("Regular"), load("Bold")]);
+  const page = pdf.addPage([P, P]);
+  page.drawRectangle({ x: 0, y: 0, width: P, height: P, color: BG });
 
-  const text = (t: string, y: number, size: number) =>
-    page.drawText(t, { x: 34.0156 * S, y: 282.96 - y * S, size: size * S, font, color: FG });
+  // Word-wrap to the text column (left margin X, right margin R).
+  const wrap = (t: string, fnt = font) => {
+    const out: string[] = [];
+    let line = "";
+    for (const w of t.split(" ")) {
+      const next = line ? `${line} ${w}` : w;
+      if (line && fnt.widthOfTextAtSize(next, FS) > P - X - R) {
+        out.push(line);
+        line = w;
+      } else line = next;
+    }
+    return [...out, line];
+  };
+  // Groups: name | subtitle + title | details, with GAP between groups.
+  const groups: [string[], typeof font][] = [
+    [["DINA SUE"], bold],
+    [[f.subtitle, f.title], font],
+    [[`Material: ${f.material}`, sizeLine(f)].filter(Boolean), font],
+  ];
+  let y = TOP;
+  groups.forEach(([texts, fnt], g) => {
+    if (g) y += GAP;
+    for (const l of texts.flatMap((t) => wrap(t, fnt))) {
+      page.drawText(l, { x: X, y: P - y, size: FS, font: fnt, color: FG });
+      y += LH;
+    }
+  });
 
-  text(f.subtitle, 38.55, 15.12);
-  text(f.title, 62.73, 18.14);
-  text("Material: Hand-built white stoneware", 93.36, 12.85);
-  text("with layered glazes.", 108.53, 12.85);
-  const lines = f.size.split("\n").filter((l) => l.trim());
-  lines.forEach((l, i) => text(i === 0 ? `Size: ${l}` : l, 128.14 + i * 15.17, 12.85));
-  text("Scan to view piece", 354.56, 6.8);
-
-  const logo = await pdf.embedPng(await (await fetch("/dinasuelogo.png")).arrayBuffer());
-  page.drawImage(logo, { x: 292.66 * S, y: 282.96 - (23.46 + 51.08) * S, width: 51.68 * S, height: 51.08 * S });
-
-  // QR: 113.4px box at (34, 230.6) with ~3px quiet margin, modules drawn as vector squares.
-  const qr = QRCode.create(f.link, { errorCorrectionLevel: "M" }).modules;
-  const n = qr.size, box = 107.7, m = box / n, x0 = 37.1, y0 = 233.7;
-  for (let r = 0; r < n; r++)
-    for (let c = 0; c < n; c++)
-      if (qr.get(r, c))
-        page.drawRectangle({
-          x: (x0 + c * m) * S,
-          y: 282.96 - (y0 + (r + 1) * m) * S,
-          width: m * S + 0.05,
-          height: m * S + 0.05,
-          color: FG,
-        });
-
+  // QR sits at the reference position unless the text runs long; always a clear gap below the text.
+  const top = Math.max(QR_TOP, y + GAP);
+  const size = Math.min(QR_SIZE, P - top - BOTTOM);
+  const { n, dots, eyes } = qrShapes(f.link);
+  const m = size / n;
+  const at = (r: number, c: number, h: number) => ({ x: X + c * m, y: P - top - r * m - h });
+  for (const [r, c] of dots) page.drawCircle({ ...at(r + 0.5, c + 0.5, 0), size: m * 0.42, color: FG });
+  for (const [r, c] of eyes) {
+    page.drawRectangle({ ...at(r + 0.5, c + 0.5, 6 * m), width: 6 * m, height: 6 * m, borderColor: FG, borderWidth: m });
+    page.drawRectangle({ ...at(r + 2, c + 2, 3 * m), width: 3 * m, height: 3 * m, color: FG });
+  }
   return pdf.save();
+}
+
+function QrPreview({ link }: { link: string }) {
+  const { n, dots, eyes } = qrShapes(link || " ");
+  return (
+    <svg viewBox={`0 0 ${n} ${n}`} className="h-full w-full" fill="currentColor">
+      {dots.map(([r, c]) => <circle key={`${r}-${c}`} cx={c + 0.5} cy={r + 0.5} r={0.42} />)}
+      {eyes.map(([r, c]) => (
+        <g key={`e${r}-${c}`}>
+          <rect x={c + 0.5} y={r + 0.5} width={6} height={6} fill="none" stroke="currentColor" strokeWidth={1} />
+          <rect x={c + 2} y={r + 2} width={3} height={3} />
+        </g>
+      ))}
+    </svg>
+  );
 }
 
 export default function Home() {
   const [f, setF] = useState({
     subtitle: "Color Unbound 2026",
     title: "Golden Hour",
-    size: "Diameter Top: 27cm\nDiameter Bottom: 19cm\nHeight: 42cm",
+    material: "Hand-built white stoneware with layered glazes.",
+    top: "27",
+    bottom: "19",
+    height: "42",
     link: "https://",
   });
   const [busy, setBusy] = useState(false);
@@ -75,7 +132,6 @@ export default function Home() {
   const input =
     "mt-1.5 w-full rounded-lg border border-stone-300 bg-white px-3.5 py-2.5 text-sm text-stone-900 shadow-sm outline-none transition placeholder:text-stone-400 focus:border-[#344E43] focus:ring-2 focus:ring-[#344E43]/20";
   const label = "block text-sm font-medium text-stone-700";
-  const sizeLines = f.size.split("\n").filter((l) => l.trim());
 
   return (
     <div className="min-h-screen">
@@ -100,11 +156,16 @@ export default function Home() {
           >
             <label className={label}>Subtitle<input className={input} value={f.subtitle} onChange={set("subtitle")} required /></label>
             <label className={label}>Title<input className={input} value={f.title} onChange={set("title")} required /></label>
-            <label className={label}>
-              Size
-              <textarea className={input} rows={3} value={f.size} onChange={set("size")} />
-              <span className="mt-1 block text-xs font-normal text-stone-500">One measurement per line. &quot;Size:&quot; is added automatically.</span>
-            </label>
+            <label className={label}>Material<input className={input} value={f.material} onChange={set("material")} required /></label>
+            <fieldset>
+              <legend className={label}>Size (cm)</legend>
+              <div className="grid grid-cols-3 gap-3">
+                <label className={label}>Diameter top<input className={input} inputMode="decimal" value={f.top} onChange={set("top")} /></label>
+                <label className={label}>Diameter bottom<input className={input} inputMode="decimal" value={f.bottom} onChange={set("bottom")} /></label>
+                <label className={label}>Height<input className={input} inputMode="decimal" value={f.height} onChange={set("height")} /></label>
+              </div>
+              <span className="mt-1 block text-xs font-normal text-stone-500">Shown as &quot;Size: top x bottom x height&quot;. &quot;cm&quot; is added automatically; leave a box empty to skip it.</span>
+            </fieldset>
             <label className={label}>Website link<input className={input} type="url" placeholder="https://" value={f.link} onChange={set("link")} required /></label>
             <button
               disabled={busy}
@@ -118,24 +179,21 @@ export default function Home() {
         <section>
           <h2 className="text-sm font-medium text-stone-500 lg:mt-1.5">Preview</h2>
           <div className="mt-[2.1rem] flex justify-center rounded-2xl border border-stone-200 bg-stone-100 p-6">
-            <div className="aspect-square w-full max-w-[378px] shadow-lg" style={{ background: "#F6EFE2", color: "#344E43", containerType: "inline-size" }}>
-              <div className="relative h-full w-full" style={{ fontSize: "3.4cqw" }}>
-                <div className="absolute left-[9%] top-[6.5%] w-[62%] leading-tight">
-                  <div style={{ fontSize: "1.18em" }}>{f.subtitle}</div>
-                  <div style={{ fontSize: "1.41em" }} className="mt-[0.2em]">{f.title}</div>
-                  <div className="mt-[1.3em]">Material: Hand-built white stoneware with layered glazes.</div>
-                  <div className="mt-[0.8em]">
-                    {sizeLines.map((l, i) => <div key={i}>{i === 0 ? `Size: ${l}` : l}</div>)}
-                  </div>
+            <div className={`${poppins.className} aspect-square w-full max-w-[378px] shadow-lg`} style={{ background: "#F6EFE2", color: "#344E43", containerType: "inline-size" }}>
+              <div className="flex h-full w-full flex-col pb-[7%] pl-[10.7%] pr-[20%] pt-[9.3%]" style={{ fontSize: "4.2cqw", lineHeight: 1.33 }}>
+                <div className="font-bold">DINA SUE</div>
+                <div className="mt-[0.77em]">{f.subtitle}</div>
+                <div>{f.title}</div>
+                <div className="mt-[0.77em]">Material: {f.material}</div>
+                {sizeLine(f) && <div>{sizeLine(f)}</div>}
+                <div className="min-h-[1.5em] flex-1" />
+                <div className="aspect-square w-[40%] min-h-0 shrink">
+                  <QrPreview link={f.link} />
                 </div>
-                {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img src="/dinasuelogo.png" alt="" className="absolute" style={{ left: "77.4%", top: "6.2%", width: "13.7%" }} />
-                <div className="absolute left-[9%] top-[61%] aspect-square w-[30%] border-2 border-dashed border-[#344E43]/40" />
-                <div className="absolute left-[9%] top-[94%] text-[0.6em]">Scan to view piece</div>
               </div>
             </div>
           </div>
-          <p className="mt-3 text-center text-xs text-stone-500">Approximate preview. The QR code is generated in the PDF.</p>
+          <p className="mt-3 text-center text-xs text-stone-500">Approximate preview.</p>
         </section>
       </main>
     </div>
