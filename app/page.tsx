@@ -15,9 +15,10 @@ const BG = rgb(0.9647, 0.9373, 0.8863);
 const FG = rgb(0.2, 0.3059, 0.2627);
 // R: wider right margin than left so lines wrap early; GAP: space between text groups.
 const LH = 0.056 * P;
+const NAME_FS = 0.075 * P; // brand name, much larger than body text
 const R = 0.2 * P, GAP = 0.6 * LH, X = 0.107 * P, FS = 0.042 * P, TOP = 0.13 * P, QR_TOP = 0.55 * P, QR_SIZE = 0.4 * P, BOTTOM = 0.07 * P;
 
-type Fields = { subtitle: string; title: string; material: string; top: string; bottom: string; height: string; link: string };
+type Fields = { title: string; material: string; top: string; bottom: string; height: string; link: string };
 // Top x Bottom x Height, in cm.
 // Empty parts are skipped; no line at all when every part is empty.
 const sizeLine = (f: Fields) => {
@@ -56,20 +57,18 @@ async function buildPdf(f: Fields) {
     }
     return [...out, line];
   };
-  // Groups: name | subtitle + title | details, with GAP between groups.
-  const groups: [string[], typeof font][] = [
-    [["DINA SUE"], bold],
-    [[f.subtitle, f.title], font],
-    [[`Material: ${f.material}`, sizeLine(f)].filter(Boolean), font],
-  ];
-  let y = TOP;
-  groups.forEach(([texts, fnt], g) => {
-    if (g) y += GAP;
-    for (const l of texts.flatMap((t) => wrap(t, fnt))) {
-      page.drawText(l, { x: X, y: P - y, size: FS, font: fnt, color: FG });
+  page.drawText("DINA-SUE", { x: X, y: P - TOP, size: NAME_FS, font: bold, color: FG });
+
+  // Groups below the name: title | details, with GAP before each group.
+  const groups = [[f.title], [`Material: ${f.material}`, sizeLine(f)].filter(Boolean)];
+  let y = TOP + LH;
+  for (const texts of groups) {
+    y += GAP;
+    for (const l of texts.flatMap((t) => wrap(t))) {
+      page.drawText(l, { x: X, y: P - y, size: FS, font, color: FG });
       y += LH;
     }
-  });
+  }
 
   // QR sits at the reference position unless the text runs long; always a clear gap below the text.
   const top = Math.max(QR_TOP, y + GAP);
@@ -102,7 +101,6 @@ function QrPreview({ link }: { link: string }) {
 
 export default function Home() {
   const [f, setF] = useState({
-    subtitle: "Color Unbound 2026",
     title: "Golden Hour",
     material: "Hand-built white stoneware with layered glazes.",
     top: "27",
@@ -154,7 +152,6 @@ export default function Home() {
               generate();
             }}
           >
-            <label className={label}>Subtitle<input className={input} value={f.subtitle} onChange={set("subtitle")} required /></label>
             <label className={label}>Title<input className={input} value={f.title} onChange={set("title")} required /></label>
             <label className={label}>Material<input className={input} value={f.material} onChange={set("material")} required /></label>
             <fieldset>
@@ -181,9 +178,8 @@ export default function Home() {
           <div className="mt-[2.1rem] flex justify-center rounded-2xl border border-stone-200 bg-stone-100 p-6">
             <div className={`${poppins.className} aspect-square w-full max-w-[378px] shadow-lg`} style={{ background: "#F6EFE2", color: "#344E43", containerType: "inline-size" }}>
               <div className="flex h-full w-full flex-col pb-[7%] pl-[10.7%] pr-[20%] pt-[9.3%]" style={{ fontSize: "4.2cqw", lineHeight: 1.33 }}>
-                <div className="font-bold">DINA SUE</div>
-                <div className="mt-[0.77em]">{f.subtitle}</div>
-                <div>{f.title}</div>
+                <div className="font-bold leading-none" style={{ fontSize: "1.79em" }}>DINA-SUE</div>
+                <div className="mt-[0.77em]">{f.title}</div>
                 <div className="mt-[0.77em]">Material: {f.material}</div>
                 {sizeLine(f) && <div>{sizeLine(f)}</div>}
                 <div className="min-h-[1.5em] flex-1" />
