@@ -60,12 +60,15 @@ async function buildPdf(f: Fields) {
   page.drawText("DINA-SUE", { x: X, y: P - TOP, size: NAME_FS, font: bold, color: FG });
 
   // Groups below the name: title | details, with GAP before each group.
-  const groups = [[f.title], [`Material: ${f.material}`, sizeLine(f)].filter(Boolean)];
+  const groups = [
+    { texts: [f.title], fnt: bold },
+    { texts: [`Material: ${f.material}`, sizeLine(f)].filter(Boolean), fnt: font },
+  ];
   let y = TOP + LH;
-  for (const texts of groups) {
+  for (const { texts, fnt } of groups) {
     y += GAP;
-    for (const l of texts.flatMap((t) => wrap(t))) {
-      page.drawText(l, { x: X, y: P - y, size: FS, font, color: FG });
+    for (const l of texts.flatMap((t) => wrap(t, fnt))) {
+      page.drawText(l, { x: X, y: P - y, size: FS, font: fnt, color: FG });
       y += LH;
     }
   }
@@ -179,7 +182,7 @@ export default function Home() {
             <div className={`${poppins.className} aspect-square w-full max-w-[378px] shadow-lg`} style={{ background: "#F6EFE2", color: "#344E43", containerType: "inline-size" }}>
               <div className="flex h-full w-full flex-col pb-[7%] pl-[10.7%] pr-[20%] pt-[9.3%]" style={{ fontSize: "4.2cqw", lineHeight: 1.33 }}>
                 <div className="font-bold leading-none" style={{ fontSize: "1.79em" }}>DINA-SUE</div>
-                <div className="mt-[0.77em]">{f.title}</div>
+                <div className="mt-[0.77em] font-bold">{f.title}</div>
                 <div className="mt-[0.77em]">Material: {f.material}</div>
                 {sizeLine(f) && <div>{sizeLine(f)}</div>}
                 <div className="min-h-[1.5em] flex-1" />
